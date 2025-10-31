@@ -235,7 +235,7 @@ def generate_struct_format(name_type_pairs: list[NameType], nested_field_delimit
     return DBFormat(format=fmt, fields=fields, size=struct.calcsize(fmt))
 
 
-def parse_db_file(p: Path, nesting_depth_to_skip=1) -> DBFormat:
+def parse_db_file(p: Path | str, nesting_depth_to_skip=1) -> DBFormat:
     """Parse a DB file and return a DBFormat object.
 
     Args:
@@ -245,6 +245,7 @@ def parse_db_file(p: Path, nesting_depth_to_skip=1) -> DBFormat:
     Returns:
         DBFormat: The parsed DB file
     """
+    p = Path(p)
     result = program.parseString(p.read_text(encoding="utf-8-sig"), parse_all=True).as_dict()
     # default = defaults.parseString(p.read_text(encoding="utf-8-sig"), parse_all=True).as_dict()
     types = result["TYPES"]

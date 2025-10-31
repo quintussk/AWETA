@@ -1,0 +1,35 @@
+﻿TYPE "LineStatus_type"
+VERSION : 0.1
+   STRUCT
+      LineStatus_WORD { ExternalVisible := 'False'} : Word;   // #1=OK, #2=WARNING, #3=ERROR, #4=FAILURE, #5=INFO
+      OK { ExternalVisible := 'False'} : Bool;   // Everything is running as expected
+      Warning { ExternalVisible := 'False'} : Bool;   // A situation that requires the operators attention has occured
+      Error { ExternalVisible := 'False'} : Bool;   // A fault that prevents the machine from operating has occured
+      Failure { ExternalVisible := 'False'} : Bool;   // Some element of the machine has malfunctioned
+      Info { ExternalVisible := 'False'} : Bool;   // Some relevant information about the machine is being reported
+   END_STRUCT;
+
+END_TYPE
+
+DATA_BLOCK "DB_General"
+{ DB_Accessible_From_OPC_UA := 'FALSE' ;
+ DB_Accessible_From_Webserver := 'FALSE' ;
+ S7_Optimized_Access := 'FALSE' }
+VERSION : 0.1
+NON_RETAIN
+   STRUCT 
+      M_LineStatus { ExternalVisible := 'False'; S7_SetPoint := 'False'} : "LineStatus_type";
+      M_TotalReset { ExternalVisible := 'False'} : Bool;
+      M_Enable { ExternalVisible := 'False'} : Bool;   // The system has been triggered to start running
+      M_Siren { ExternalVisible := 'False'} : Bool;   // The siren is activated
+      M_Lamp { ExternalVisible := 'False'} : Bool;   // The lamp on the cabinet is activated
+      M_Thermal { ExternalVisible := 'False'} : Bool;   // A Thermal error is present
+      M_AutoPauseLineInfeed { ExternalVisible := 'False'} : Bool;
+      M_KAG0 { ExternalVisible := 'False'} : Bool;
+   END_STRUCT;
+
+
+BEGIN
+
+END_DATA_BLOCK
+

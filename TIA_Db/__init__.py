@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from .s7mini import *  # re-export helpers for convenience
-from .datablock import S7DataBlock
+from .utlis import S7DataBlock
 
 __all__ = [
     # s7mini exports via wildcard

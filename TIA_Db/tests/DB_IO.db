@@ -41,8 +41,8 @@ DATA_BLOCK "DB_IO"
 VERSION : 0.1
 NON_RETAIN
    STRUCT 
-      InfeedBelt { S7_SetPoint := 'False'} : Array[1.."NUM_OF_INFEEDBELT"] of "InfeedBelt_IO_type";
-      BCK : Array[1.."NUM_OF_BCK_OUTLETS"] of "BCK_IO_type";
+      InfeedBelt : Array[1.."2"] of "InfeedBelt_IO_type";
+      BCK : Array[1.."5"] of "BCK_IO_type";
       O_M_BCK_Roller { S7_SetPoint := 'True'} : Bool;
       BCK_Infeed_Roller_Full { S7_SetPoint := 'True'} : Bool;
       General { S7_SetPoint := 'False'} : "General_IO_type";
