@@ -1,0 +1,55 @@
+﻿TYPE "InfeedBelt_IO_type"
+VERSION : 0.1
+   STRUCT
+      I_FT_In : Bool;   // Photoeye at the infeed of an infeedBelt.
+      I_FT_Out : Bool;   // Photoeye at the end of an infeedBelt. Used to stop the belt if the following on is off, and to create a gap between crates/boxes
+      O_M_Belt : Bool;   // Belt motor run signal.
+   END_STRUCT;
+
+END_TYPE
+
+TYPE "BCK_IO_type"
+VERSION : 0.1
+   STRUCT
+      I_FT_Pusher : Bool;
+      I_FT_Outlet_full : Bool;
+      O_Clamp : Bool;
+      O_Stop_Down : Bool;
+      O_Pusher_FW : Bool;
+   END_STRUCT;
+
+END_TYPE
+
+TYPE "General_IO_type"
+VERSION : 0.1
+   STRUCT
+      I_ThermalProtectionOK { ExternalVisible := 'False'} : Bool;   // Show no Thermal error is present
+      I_BT_EN_ON { ExternalVisible := 'False'} : Bool;   // Automatic (Start button, SBMA/SBMB NO)
+      I_BT_EN_OFF { ExternalVisible := 'False'} : Bool;   // Automatic (Stop button, SBMA/SBMB NC)
+      I_GraderRunning { ExternalVisible := 'False'} : Bool;   // Indicates the grader at the infeed of the outlets is running
+      Palletizer_Consent { ExternalVisible := 'False'} : Bool;   // Indicates a palatizer at the outfeed of the line is ready to recieve cases
+      I_IFMRepeaterOK { ExternalVisible := 'False'} : Bool;   // Indicates the IFM remote IO station is functioning without faults
+      I_AirPressureOK { ExternalVisible := 'False'} : Bool;   // Indicates the Air pressure in the system is not showing faults
+      I_KAG_SafetyOK { ExternalVisible := 'False'} : Bool;   // Safety Device OK
+      O_Lamp_ScadaError { ExternalVisible := 'False'} : Bool;   // Error light on the SCADA screen is lit
+   END_STRUCT;
+
+END_TYPE
+
+DATA_BLOCK "DB_IO"
+{ S7_Optimized_Access := 'FALSE' }
+VERSION : 0.1
+NON_RETAIN
+   STRUCT 
+      InfeedBelt { S7_SetPoint := 'False'} : Array[1.."NUM_OF_INFEEDBELT"] of "InfeedBelt_IO_type";
+      BCK : Array[1.."NUM_OF_BCK_OUTLETS"] of "BCK_IO_type";
+      O_M_BCK_Roller { S7_SetPoint := 'True'} : Bool;
+      BCK_Infeed_Roller_Full { S7_SetPoint := 'True'} : Bool;
+      General { S7_SetPoint := 'False'} : "General_IO_type";
+   END_STRUCT;
+
+
+BEGIN
+
+END_DATA_BLOCK
+

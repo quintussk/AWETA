@@ -1,1 +1,38 @@
 # AWETA
+
+## Standalone build (no Python required for end users)
+
+This project can be packaged into a single executable using PyInstaller.
+
+Notes:
+- You must build on each target OS (macOS build for macOS, Windows build for Windows).
+- The app uses Tkinter (bundled with Python) and `python-snap7` for PLC comms.
+
+### macOS (on macOS)
+
+```bash
+bash scripts/build_macos.sh
+```
+
+Result: `dist/aweta-app` (console binary). Launching will open a terminal and the Tkinter GUI.
+
+Note: If you see a warning that "tkinter installation is broken" and the GUI
+does not appear, install a Python that includes Tk:
+
+- Recommended: install Python from python.org (macOS universal installer), then rerun the build
+- Or: `brew install tcl-tk` and use a Python built against that Tk (advanced)
+
+### Windows (on Windows)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
+```
+
+Result: `dist/aweta-app.exe`.
+
+### Running
+
+- On macOS: `./dist/aweta-app`
+- On Windows: `dist\\aweta-app.exe`
+
+If the PLC cannot be reached, the app will show a snap7 status and continue the simulation.

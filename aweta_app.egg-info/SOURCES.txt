@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+TIA_Db/__init__.py
+TIA_Db/datablock.py
+TIA_Db/s7mini.py
+aweta/__init__.py
+aweta/datablock.py
+aweta_app.egg-info/PKG-INFO
+aweta_app.egg-info/SOURCES.txt
+aweta_app.egg-info/dependency_links.txt
+aweta_app.egg-info/not-zip-safe
+aweta_app.egg-info/requires.txt
+aweta_app.egg-info/top_level.txt
