@@ -21,6 +21,7 @@ IDENT = QUOTED_IDENT | UNQUOTED_IDENT
 REAL = Regex(r"\d+\.\d*")
 INT = Regex(r"\d+")
 LBRACE, RBRACE, SEMI, COLON = map(Suppress, "{};:")
+LBRACKET, RBRACKET = map(Suppress, "[]")
 EQUALS = Suppress(":=")
 BOOLEAN = CaselessKeyword("True") | CaselessKeyword("False")
 COMMENT = Suppress("//" + Regex(r".*"))
@@ -48,13 +49,28 @@ optional_default_value = Suppress(Optional(expr=value_assignment, default=None))
 
 struct_def = Forward()
 
+# Array syntax: Array[lower..upper] of <type>
+# lower and upper can be INT or QUOTED_IDENT (like "2")
+array_bounds = INT("lower") + Suppress("..") + (INT | QUOTED_IDENT)("upper")
+array_def = (
+    CaselessKeyword("Array")
+    + LBRACKET
+    + array_bounds
+    + RBRACKET
+    + Suppress(CaselessKeyword("of"))
+    + (QUOTED_IDENT | struct_def)("array_type")
+)
+
+# Type can be: basic S7 type, quoted identifier (type reference), inline struct, or array
+type_spec = (S7_DTYPE + optional_default_value + SEMI) | (QUOTED_IDENT + SEMI) | struct_def | (array_def + SEMI)
+
 struct_element = Dict(
     Group(
         Optional(date)
         + Optional(IDENT)
         + optional_attribute_assignments
         + COLON
-        + Optional((S7_DTYPE + optional_default_value + SEMI) | (QUOTED_IDENT + SEMI) | struct_def)
+        + Optional(type_spec)
     )  # if first:
     #     first = False
     #     await asyncio.sleep(HEATZONE_SIDE_EFFECT_TIME)
@@ -143,11 +159,63 @@ s7_dtype_to_measurement_mapping: dict = {k: v["measurement_type"] for k, v in s7
 
 
 def resolve_data_types(types: dict[str, Any], prefix: list[str], d: Any) -> Iterator[tuple[list[str], Any]]:
+    # Check if this is an array definition (has all three required keys)
+    if isinstance(d, dict) and "lower" in d and "upper" in d and "array_type" in d:
+        # This is an array: Array[lower..upper] of <type>
+        # Handle lower (should be int or string)
+        lower_val = d["lower"]
+        if isinstance(lower_val, list) and len(lower_val) > 0:
+            lower_str = str(lower_val[0])
+        else:
+            lower_str = str(lower_val)
+        try:
+            lower = int(lower_str)
+        except ValueError:
+            lower = int(''.join(filter(str.isdigit, lower_str)) or "1")
+        
+        # Handle upper (can be list from QUOTED_IDENT)
+        upper_val = d["upper"]
+        if isinstance(upper_val, list) and len(upper_val) > 0:
+            upper_str = str(upper_val[0]).strip('"\'')
+        else:
+            upper_str = str(upper_val).strip('"\'')
+        try:
+            upper = int(upper_str)
+        except ValueError:
+            upper = int(''.join(filter(str.isdigit, upper_str)) or "1")
+        
+        # Handle array_type (can be list from QUOTED_IDENT)
+        array_type_val = d["array_type"]
+        if isinstance(array_type_val, list) and len(array_type_val) > 0:
+            array_type_name = str(array_type_val[0]).strip('"\'')
+        else:
+            array_type_name = str(array_type_val).strip('"\'')
+        
+        # Resolve array_type from types dict
+        if array_type_name in types:
+            array_type = types[array_type_name]
+        else:
+            # If not found in types, treat as base type
+            array_type = array_type_name
+        
+        # Expand array: for each index from lower to upper, recursively resolve the type
+        for idx in range(lower, upper + 1):
+            array_index_prefix = prefix + [f"[{idx}]"]
+            yield from resolve_data_types(types, array_index_prefix, array_type)
+        return
+    
     if isinstance(d, dict):
+        # Check if this dict might be an array definition before iterating
+        # If not an array, process as normal nested structure
         for k, v in d.items():
             yield from resolve_data_types(types, prefix + [k], v)
-    elif d in types:
-        yield from resolve_data_types(types, prefix, deepcopy(types[d]))
+    elif isinstance(d, str):
+        # Check if this is a type reference (quoted identifier)
+        if d in types:
+            yield from resolve_data_types(types, prefix, deepcopy(types[d]))
+        else:
+            # Not a type reference, treat as base type
+            yield prefix, d
     else:
         if d == "DTL":
             # now we need to unpack a date time struct from Siemens
@@ -161,6 +229,24 @@ def resolve_data_types(types: dict[str, Any], prefix: list[str], d: Any) -> Iter
             yield prefix + ["NANOSECOND"], "DWord"
         else:
             yield prefix, d
+
+
+def _join_name_parts(parts: list[str], delimiter: str = ".") -> str:
+    """Join name parts, handling array indices specially.
+    
+    Array indices (parts starting with '[') are appended to the previous part
+    without a delimiter. Example: ['InfeedBelt', '[1]', 'I_FT_In'] -> 'InfeedBelt[1].I_FT_In'
+    """
+    if not parts:
+        return ""
+    result = [parts[0]]
+    for part in parts[1:]:
+        if part.startswith("["):
+            # Array index: append to previous part without delimiter
+            result[-1] = result[-1] + part
+        else:
+            result.append(part)
+    return delimiter.join(result)
 
 
 def generate_struct_format(name_type_pairs: list[NameType], nested_field_delimiter=".") -> DBFormat:
@@ -210,11 +296,11 @@ def generate_struct_format(name_type_pairs: list[NameType], nested_field_delimit
 
         if i.type == "Bool":
             bool_counter += 1
-            bools.append(nested_field_delimiter.join(i.name))
+            bools.append(_join_name_parts(i.name, nested_field_delimiter))
         else:
             fields.append(
                 DBField(
-                    name_or_names=nested_field_delimiter.join(i.name),
+                    name_or_names=_join_name_parts(i.name, nested_field_delimiter),
                     type=i.type,
                     format=s7_dtype_to_struct_mapping[i.type],
                 )
@@ -251,13 +337,34 @@ def parse_db_file(p: Path | str, nesting_depth_to_skip=1) -> DBFormat:
     types = result["TYPES"]
     data = result["DATA_BLOCK"]
     result["BEGIN"]  # er kan hier nog wat met de default waardes gedaan worden.
+    
+    # Debug: print the parsed structure for arrays
+    # import json
+    # print("DATA_BLOCK structure:", json.dumps({k: type(v).__name__ for k, v in data.items()}, indent=2))
+    
+    # Collect resolved types, ensuring type is always a string
+    resolved_pairs = []
+    for k, v in resolve_data_types(types, [], data):
+        if not isinstance(k, list) or len(k) == 0:
+            continue
+        # Ensure type is a string (S7 type name)
+        if isinstance(v, str):
+            resolved_pairs.append((k, v))
+        elif isinstance(v, (dict, list)):
+            # If type is a complex structure, we shouldn't be here - skip or error
+            # This might happen if arrays aren't being expanded correctly
+            continue
+        else:
+            # Try to convert to string
+            resolved_pairs.append((k, str(v)))
+    
     result = generate_struct_format(
         [
             NameType(
                 name=k,
                 type=v,
             )
-            for k, v in list(resolve_data_types(types, [], data))
+            for k, v in resolved_pairs
         ]
     )
 
