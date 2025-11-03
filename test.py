@@ -103,6 +103,154 @@ class Belt(QGraphicsRectItem):
         self.sensor_item.setVisible(True)
         self.sensor_item.setBrush(QBrush(Qt.green if self.sensor_state else Qt.gray))
 
+    def update_box_indicator(self):
+        self.box_indicator.setBrush(QBrush(Qt.blue if self.has_box else Qt.gray))
+
+    def itemChange(self, change, value):
+        from PySide6.QtWidgets import QGraphicsItem as _QGI
+        if change == _QGI.ItemPositionHasChanged:
+            sc = self.scene()
+            if sc is not None:
+                views = sc.views()
+                if views:
+                    v = views[0]
+                    if hasattr(v, 'update_all_link_paths'):
+                        v.update_all_link_paths()
+        return super().itemChange(change, value)
+
+class ExitBlock(QGraphicsRectItem):
+    def __init__(self, x, y, w=180, h=80, label="Exit"):
+        super().__init__(0, 0, w, h)
+        self.setPos(x, y)
+        self.setBrush(QBrush(Qt.white))
+        self.setPen(QPen(Qt.black, 2))
+        self.setFlags(
+            QGraphicsItem.ItemIsMovable |
+            QGraphicsItem.ItemIsSelectable
+        )
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        # Alleen input port (links)
+        self.p_in = Port(self, 0, h/2)
+
+        # Titel
+        self.label = label
+        self.title_item = QGraphicsSimpleTextItem(self)
+        self.title_item.setText(self.label)
+        self.title_item.setPos(8, 6)
+
+        # Sensor
+        self.sensor_enabled: bool = False
+        self.sensor_var: str | None = None
+        self.sensor_state: bool = False
+        self.sensor_item = QGraphicsEllipseItem(-5, -5, 10, 10, self)
+        self.sensor_item.setBrush(QBrush(Qt.gray))
+        self.sensor_item.setPen(QPen(Qt.black, 1))
+        self.sensor_item.setPos(self.rect().width() - 14, 6)
+        self.sensor_item.setVisible(False)
+
+        # Capaciteit & dwell
+        self.capacity: int = 3          # max aantal dozen tegelijk
+        self.dwell_ms: int = 2000       # wachttijd voor auto-verwijderen (ms)
+
+        # Dozen in het exit-blok
+        self.boxes: list[dict] = []     # {"item": QGraphicsRectItem, "elapsed": int}
+
+        # Countdown label (bottom-right)
+        from PySide6.QtWidgets import QGraphicsSimpleTextItem as _QGSTI
+        self.timer_text = _QGSTI("", self)
+        self.timer_text.setVisible(False)
+
+    def set_label(self, text: str):
+        self.label = text
+        self.title_item.setText(self.label)
+
+    def set_sensor_enabled(self, enabled: bool):
+        self.sensor_enabled = bool(enabled)
+        self.sensor_item.setVisible(self.sensor_enabled)
+        self.update_sensor_visual()
+
+    def update_sensor_visual(self):
+        if not self.sensor_enabled:
+            self.sensor_item.setVisible(False)
+            return
+        active = len(self.boxes) > 0
+        self.sensor_state = active
+        self.sensor_item.setVisible(True)
+        self.sensor_item.setBrush(QBrush(Qt.green if active else Qt.gray))
+        if self.sensor_var:
+            VARS[self.sensor_var] = active
+
+    def _update_timer_text(self):
+        # Show remaining time (s) of the soonest-to-expire box in bottom-right
+        if not self.boxes:
+            self.timer_text.setVisible(False)
+            return
+        # compute minimum remaining among boxes
+        rem_ms_list = [max(0, int(self.dwell_ms) - int(b.get("elapsed", 0))) for b in self.boxes]
+        if not rem_ms_list:
+            self.timer_text.setVisible(False)
+            return
+        rem_ms = min(rem_ms_list)
+        txt = f"{rem_ms/1000.0:.1f}s"
+        self.timer_text.setText(txt)
+        # position bottom-right with small margin
+        br = self.timer_text.boundingRect()
+        r = self.rect()
+        margin = 6
+        self.timer_text.setPos(r.width() - br.width() - margin, r.height() - br.height() - margin)
+        self.timer_text.setVisible(True)
+
+    def can_accept(self) -> bool:
+        return len(self.boxes) < max(0, int(self.capacity))
+
+    def add_box(self, box_item: QGraphicsRectItem):
+        # Adopt box in het exitblok
+        box_item.setParentItem(self)
+        box_item.setPen(QPen(Qt.black, 1))
+        box_item.setBrush(QBrush(Qt.darkCyan))
+        # Plaatsing: eenvoudige horizontale stapel
+        idx = len(self.boxes)
+        r = self.rect()
+        margin = 8
+        cell_w = 16
+        per_row = max(1, int((r.width() - 2*margin) // (cell_w + 2)))
+        x = margin + (idx % per_row) * (cell_w + 2)
+        y = r.height()/2 - 5
+        box_item.setPos(QPointF(x, y))
+        self.boxes.append({"item": box_item, "elapsed": 0})
+        self.update_sensor_visual()
+        self._update_timer_text()
+
+    def itemChange(self, change, value):
+        from PySide6.QtWidgets import QGraphicsItem as _QGI
+        if change == _QGI.ItemPositionHasChanged:
+            sc = self.scene()
+            if sc is not None:
+                views = sc.views()
+                if views:
+                    v = views[0]
+                    if hasattr(v, 'update_all_link_paths'):
+                        v.update_all_link_paths()
+        return super().itemChange(change, value)
+
+    def tick(self, dt_ms: int):
+        if not self.boxes:
+            # sensor resetten als leeg
+            if self.sensor_enabled:
+                self.update_sensor_visual()
+            self._update_timer_text()
+            return
+        to_remove = []
+        for b in self.boxes:
+            b["elapsed"] += dt_ms
+            if b["elapsed"] >= int(self.dwell_ms):
+                to_remove.append(b)
+        for b in to_remove:
+            if b["item"] is not None:
+                self.scene().removeItem(b["item"])
+            self.boxes.remove(b)
+        self.update_sensor_visual()
+        self._update_timer_text()
 
 # --- BoxGenerator class (always-present, spawns boxes) ---
 class BoxGenerator(QGraphicsRectItem):
