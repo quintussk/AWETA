@@ -123,6 +123,8 @@ class BoxGenerator(QGraphicsRectItem):
         # Interval (ms) and timer state
         self.interval_ms = 1500
         self.elapsed_ms = 0
+        # Running flag (start/stop)
+        self.running = True
         # Visual progress bar (bottom)
         self.pb_bg = QGraphicsRectItem(8, h-16, w-16, 8, self)
         self.pb_bg.setPen(QPen(Qt.black, 1))
@@ -135,9 +137,17 @@ class BoxGenerator(QGraphicsRectItem):
         self.interval_ms = max(100, int(ms))
         self.elapsed_ms = 0
 
+    def start(self):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
     def tick(self, dt_ms: int):
-        # Update timer bar
-        self.elapsed_ms = (self.elapsed_ms + dt_ms) % self.interval_ms
+        if not self.running:
+            # keep the progress bar as-is when stopped
+            return
+        self.elapsed_ms = (self.elapsed_ms + dt_ms) % max(1, int(self.interval_ms))
         frac = max(0.0, min(1.0, self.elapsed_ms / self.interval_ms))
         w = self.rect().width() - 16
         self.pb_fg.setRect(8, self.rect().height()-16, w*frac, 8)
@@ -194,6 +204,8 @@ class View(QGraphicsView):
         self.scene.addItem(self.dot)
         self.anim_path = None
         self.anim_t = 0.0
+        # simulation speed multiplier (1.0 = real-time)
+        self.sim_speed = 1.0
 
         # timer voor animatie
         self.timer = QTimer(self)
@@ -259,10 +271,38 @@ class View(QGraphicsView):
 
     def mouseReleaseEvent(self, ev):
         if self.rubber is not None:
-            end_item = self.itemAt(ev.pos())
-            if isinstance(end_item, Port) and end_item is not self.link_src:
-                end_parent = end_item.parentItem()
-                end_role = 'input' if (isinstance(end_parent, Belt) and end_item is end_parent.p_in) else 'output'
+            # Temporarily hide rubber so hit-test isn't blocked by it
+            self.rubber.setVisible(False)
+            scene_pos = self.mapToScene(ev.pos())
+
+            # Try to find a Port under cursor; if not, accept releasing on a Belt body (snap to its input)
+            end_item = None
+            end_parent = None
+            end_role = None
+            for it in self.scene.items(scene_pos):
+                if isinstance(it, Port) and it is not self.link_src:
+                    end_item = it
+                    end_parent = it.parentItem()
+                    end_role = 'input' if (isinstance(end_parent, Belt) and hasattr(end_parent, 'p_in') and it is end_parent.p_in) else 'output'
+                    break
+                # If user releases on a Belt (not exactly on the dot), snap to its input
+                if isinstance(it, Belt):
+                    end_item = it.p_in
+                    end_parent = it
+                    end_role = 'input'
+                    break
+                # If it's a child of a Belt, also snap to that Belt input
+                par = it.parentItem()
+                if isinstance(par, Belt):
+                    end_item = par.p_in
+                    end_parent = par
+                    end_role = 'input'
+                    break
+
+            # Restore rubber visibility for cleanup
+            self.rubber.setVisible(True)
+
+            if end_item is not None and end_parent is not None:
                 # Start values
                 src_obj = self.link_src_belt
                 src_role = self.link_src_role
@@ -280,7 +320,7 @@ class View(QGraphicsView):
                     self.scene.removeItem(path_tmp)
                     ev.accept(); return
                 # Compute path between correct ports
-                s = src_obj.p_out.scenePos() if isinstance(src_obj, (Belt, BoxGenerator)) else self.mapToScene(ev.pos())
+                s = src_obj.p_out.scenePos() if isinstance(src_obj, (Belt, BoxGenerator)) else scene_pos
                 d = dst_obj.p_in.scenePos()
                 p = QPainterPath(s)
                 mid = (s + d) / 2
@@ -305,10 +345,11 @@ class View(QGraphicsView):
                 self.refresh_port_indicators()
                 self.anim_path = path.path()
                 self.anim_t = 0.0
+
+            # Clean up rubber
             self.scene.removeItem(self.rubber)
             self.rubber = None
-            ev.accept()
-            return
+            ev.accept(); return
         super().mouseReleaseEvent(ev)
     def _rebuild_downstream(self):
         self.downstream = []
@@ -437,31 +478,32 @@ class View(QGraphicsView):
     def tick(self):
         # update animatiedot over gekozen link (als die bestaat)
         if self.anim_path is not None:
-            self.anim_t = (self.anim_t + 0.005) % 1.0
+            self.anim_t = (self.anim_t + 0.005 * self.sim_speed) % 1.0
             point = self.point_on_path(self.anim_path, self.anim_t)
             self.dot.setPos(point - QPointF(0,0))
 
         # Update generator timer and possibly spawn a box
-        dt_ms = 16
-        self.generator.tick(dt_ms)
-        if self.generator.ready_to_spawn():
-            # find a downstream belt from generator
-            next_belts = [dst for (src, dst) in self.downstream if src is self.generator]
-            if next_belts:
-                b = next_belts[0]
-                # create visual box
-                box_item = QGraphicsRectItem(-7, -5, 14, 10)
-                box_item.setBrush(QBrush(Qt.blue))
-                box_item.setPen(QPen(Qt.black, 1))
-                self.scene.addItem(box_item)
-                # start at t=0 on the destination belt
-                self.boxes.append({"item": box_item, "belt": b, "t": 0.0})
-            # reset generator elapsed to avoid multiple spawns same frame
-            self.generator.elapsed_ms = 0
+        dt_ms = int(16 * self.sim_speed)
+        if getattr(self, 'generator', None) is not None:
+            self.generator.tick(dt_ms)
+            if self.generator.ready_to_spawn():
+                # find a downstream belt from generator
+                next_belts = [dst for (src, dst) in self.downstream if src is self.generator]
+                if next_belts:
+                    b = next_belts[0]
+                    # create visual box
+                    box_item = QGraphicsRectItem(-7, -5, 14, 10)
+                    box_item.setBrush(QBrush(Qt.blue))
+                    box_item.setPen(QPen(Qt.black, 1))
+                    self.scene.addItem(box_item)
+                    # start at t=0 on the destination belt
+                    self.boxes.append({"item": box_item, "belt": b, "t": 0.0})
+                # reset generator elapsed to avoid multiple spawns same frame
+                self.generator.elapsed_ms = 0
 
         # Move boxes across belts if motor is on
-        speed_per_sec = 0.25  # fraction of belt length per second
-        dt = 0.016
+        speed_per_sec = 0.25 * self.sim_speed  # fraction of belt length per second
+        dt = 0.016 * self.sim_speed
         for bx in list(self.boxes):
             belt = bx["belt"]
             motor_on = VARS.get(belt.motor_var, False) if belt.motor_var else False
@@ -585,12 +627,53 @@ class MainWindow(QMainWindow):
         topbar.addWidget(self.btn_save)
         self.current_path = None
 
+        # Testing controls
+        self.btn_all_on = QPushButton("All belts ON", self)
+        self.btn_all_on.clicked.connect(self.all_belts_on)
+        topbar.addWidget(self.btn_all_on)
+
+        self.btn_gen_start = QPushButton("Generator Start", self)
+        self.btn_gen_start.clicked.connect(self.gen_start)
+        topbar.addWidget(self.btn_gen_start)
+
+        self.btn_gen_stop = QPushButton("Generator Stop", self)
+        self.btn_gen_stop.clicked.connect(self.gen_stop)
+        topbar.addWidget(self.btn_gen_stop)
+
+        # Tick/simulation speed
+        from PySide6.QtWidgets import QLabel, QDoubleSpinBox
+        topbar.addWidget(QLabel("Speed:", self))
+        self.spin_speed = QDoubleSpinBox(self)
+        self.spin_speed.setRange(0.1, 5.0)
+        self.spin_speed.setSingleStep(0.1)
+        self.spin_speed.setValue(1.0)
+        self.spin_speed.valueChanged.connect(self.on_speed_changed)
+        topbar.addWidget(self.spin_speed)
+
         topbar.addStretch(1)
         lay.addLayout(topbar)
 
-        # Graphics view
+        # Create graphics view (canvas)
         self.view = View()
         lay.addWidget(self.view)
+
+    def all_belts_on(self):
+        # Set all belts' motor_var to True (create var if needed)
+        for item in self.view.scene.items():
+            if isinstance(item, Belt) and item.motor_var:
+                VARS[item.motor_var] = True
+
+    def gen_start(self):
+        if getattr(self.view, 'generator', None) is not None:
+            self.view.generator.start()
+
+    def gen_stop(self):
+        if getattr(self.view, 'generator', None) is not None:
+            self.view.generator.stop()
+
+    def on_speed_changed(self, val: float):
+        # Update simulation speed multiplier
+        self.view.sim_speed = max(0.1, float(val))
 
     def open_toolbox(self):
         dlg = ToolboxDialog(self)
@@ -678,12 +761,19 @@ class MainWindow(QMainWindow):
                 "dst_port": entry["dst_port"]
             })
         import json
+        payload = {
+            "belts": belts,
+            "links": links
+        }
+        if getattr(self.view, 'generator', None) is not None:
+            payload["generator"] = {
+                "interval_ms": self.view.generator.interval_ms,
+                "x": self.view.generator.scenePos().x(),
+                "y": self.view.generator.scenePos().y(),
+                "running": getattr(self.view.generator, 'running', True)
+            }
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump({
-                "generator": {"interval_ms": self.view.generator.interval_ms, "x": self.view.generator.scenePos().x(), "y": self.view.generator.scenePos().y()},
-                "belts": belts,
-                "links": links
-            }, f, indent=2)
+            json.dump(payload, f, indent=2)
         self.current_path = path
         self.setWindowTitle(f"Conveyor UI – {path}")
         self.view.refresh_port_indicators()
@@ -698,14 +788,19 @@ class MainWindow(QMainWindow):
         self.view.links_data.clear()
         self.view.next_belt_id = 1
         self.view.next_belt_num = 1
-        # Recreate generator
-        gen_data = data.get("generator", {})
-        # Remove existing and create a new generator at saved position
-        self.view.scene.removeItem(self.view.generator)
-        gx = float(gen_data.get("x", 10.0)); gy = float(gen_data.get("y", 10.0))
-        self.view.generator = BoxGenerator(gx, gy)
-        self.view.generator.set_interval(int(gen_data.get("interval_ms", 1500)))
-        self.view.scene.addItem(self.view.generator)
+        # Recreate generator (scene.clear() already deleted old items)
+        gen_data = data.get("generator")
+        # Ensure we drop any stale Python reference
+        self.view.generator = None
+        if isinstance(gen_data, dict):
+            gx = float(gen_data.get("x", 10.0)); gy = float(gen_data.get("y", 10.0))
+            self.view.generator = BoxGenerator(gx, gy)
+            self.view.generator.set_interval(int(gen_data.get("interval_ms", 1500)))
+            if bool(gen_data.get("running", True)):
+                self.view.generator.start()
+            else:
+                self.view.generator.stop()
+            self.view.scene.addItem(self.view.generator)
         # recreate belts keeping ids
         id_to_belt = {}
         for b in data.get("belts", []):
@@ -734,7 +829,8 @@ class MainWindow(QMainWindow):
                     self.view.next_belt_num = max(self.view.next_belt_num, n + 1)
             except Exception:
                 pass
-        id_to_belt[0] = self.view.generator
+        if getattr(self.view, 'generator', None) is not None:
+            id_to_belt[0] = self.view.generator
         # recreate links
         for lk in data.get("links", []):
             src = id_to_belt.get(lk["src_id"])
