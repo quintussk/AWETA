@@ -1,8 +1,27 @@
 # file: belts_demo.py
 from PySide6.QtCore import Qt, QPointF, QTimer
 from PySide6.QtGui import QPen, QBrush, QPainterPath
-from PySide6.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QDialog, QListWidget, QDialogButtonBox, QFileDialog, QInputDialog, QGraphicsSimpleTextItem
+from PySide6.QtWidgets import QApplication, QLabel, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QDialog, QListWidget, QDialogButtonBox, QFileDialog, QInputDialog, QGraphicsSimpleTextItem, QTreeWidget, QTreeWidgetItem, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox
 import sys, math
+from pathlib import Path
+import json
+
+try:
+    from rich.console import Console
+    from rich.table import Table as RichTable
+    _RICH_OK = True
+except Exception:
+    _RICH_OK = False
+
+try:
+    from TIA_Db.utlis import S7DataBlock as TIA_S7DataBlock
+except Exception:
+    TIA_S7DataBlock = None  # type: ignore
+
+try:
+    import snap7  # type: ignore
+except Exception:
+    snap7 = None  # type: ignore
 
 # Simple variable store (placeholder for external PLC variables)
 VARS: dict[str, bool] = {}
@@ -935,11 +954,26 @@ class View(QGraphicsView):
             form = QFormLayout()
             le_title = QLineEdit(item.label, dlg)
             sb_ticks = QSpinBox(dlg); sb_ticks.setRange(1, 100); sb_ticks.setValue(item.width_ticks)
-            le_motor = QLineEdit(item.motor_var or "", dlg)
+            # variable inputs via MainWindow helpers (fallback to QLineEdit if absent)
+            wnd = self.window()
+            make_var_input = getattr(wnd, '_make_var_input', None)
+            get_var_value = getattr(wnd, '_get_var_value', None)
+            if callable(make_var_input):
+                le_motor = make_var_input(dlg, item.motor_var)
+            else:
+                le_motor = QLineEdit(item.motor_var or "", dlg)
             cb_ft_in = QCheckBox("FT In aanwezig", dlg); cb_ft_in.setChecked(getattr(item, 'ft_in_enabled', False))
-            le_ft_in = QLineEdit(getattr(item, 'ft_in_var', '') or '', dlg); le_ft_in.setEnabled(cb_ft_in.isChecked())
+            if callable(make_var_input):
+                le_ft_in = make_var_input(dlg, getattr(item, 'ft_in_var', '') or None)
+            else:
+                le_ft_in = QLineEdit(getattr(item, 'ft_in_var', '') or '', dlg)
+            le_ft_in.setEnabled(cb_ft_in.isChecked())
             cb_ft_out = QCheckBox("FT Out aanwezig", dlg); cb_ft_out.setChecked(getattr(item, 'ft_out_enabled', False))
-            le_ft_out = QLineEdit(getattr(item, 'ft_out_var', '') or '', dlg); le_ft_out.setEnabled(cb_ft_out.isChecked())
+            if callable(make_var_input):
+                le_ft_out = make_var_input(dlg, getattr(item, 'ft_out_var', '') or None)
+            else:
+                le_ft_out = QLineEdit(getattr(item, 'ft_out_var', '') or '', dlg)
+            le_ft_out.setEnabled(cb_ft_out.isChecked())
             cb_ft_in.toggled.connect(lambda v: le_ft_in.setEnabled(v))
             cb_ft_out.toggled.connect(lambda v: le_ft_out.setEnabled(v))
             form.addRow(QLabel("Titel:"), le_title)
@@ -962,13 +996,19 @@ class View(QGraphicsView):
             def on_ok():
                 item.set_label(le_title.text().strip() or item.label)
                 item.resize_for_ticks(sb_ticks.value())
-                mv = le_motor.text().strip()
-                item.motor_var = mv or None
+                if callable(get_var_value):
+                    item.motor_var = get_var_value(le_motor)
+                else:
+                    item.motor_var = (le_motor.text().strip() or None)
                 if item.motor_var and item.motor_var not in VARS:
                     VARS[item.motor_var] = False
                 item.set_sensors_enabled(cb_ft_in.isChecked(), cb_ft_out.isChecked())
-                item.ft_in_var = (le_ft_in.text().strip() or None)
-                item.ft_out_var = (le_ft_out.text().strip() or None)
+                if callable(get_var_value):
+                    item.ft_in_var = get_var_value(le_ft_in)
+                    item.ft_out_var = get_var_value(le_ft_out)
+                else:
+                    item.ft_in_var = (le_ft_in.text().strip() or None)
+                    item.ft_out_var = (le_ft_out.text().strip() or None)
                 for var in (item.ft_in_var, item.ft_out_var):
                     if var and var not in VARS:
                         VARS[var] = False
@@ -1019,9 +1059,20 @@ class View(QGraphicsView):
             sb_capacity = QSpinBox(dlg); sb_capacity.setRange(0, 999); sb_capacity.setValue(int(getattr(item, 'capacity', 3)))
             sb_dwell = QSpinBox(dlg); sb_dwell.setRange(0, 600000); sb_dwell.setSingleStep(100); sb_dwell.setSuffix(" ms"); sb_dwell.setValue(int(getattr(item, 'dwell_ms', 2000)))
             cb_ft_in = QCheckBox("FT In aanwezig", dlg); cb_ft_in.setChecked(getattr(item, 'ft_in_enabled', False))
-            le_ft_in = QLineEdit(getattr(item, 'ft_in_var', '') or '', dlg); le_ft_in.setEnabled(cb_ft_in.isChecked())
+            wnd = self.window()
+            make_var_input = getattr(wnd, '_make_var_input', None)
+            get_var_value = getattr(wnd, '_get_var_value', None)
+            if callable(make_var_input):
+                le_ft_in = make_var_input(dlg, getattr(item, 'ft_in_var', '') or None)
+            else:
+                le_ft_in = QLineEdit(getattr(item, 'ft_in_var', '') or '', dlg)
+            le_ft_in.setEnabled(cb_ft_in.isChecked())
             cb_ft_out = QCheckBox("FT Out aanwezig", dlg); cb_ft_out.setChecked(getattr(item, 'ft_out_enabled', False))
-            le_ft_out = QLineEdit(getattr(item, 'ft_out_var', '') or '', dlg); le_ft_out.setEnabled(cb_ft_out.isChecked())
+            if callable(make_var_input):
+                le_ft_out = make_var_input(dlg, getattr(item, 'ft_out_var', '') or None)
+            else:
+                le_ft_out = QLineEdit(getattr(item, 'ft_out_var', '') or '', dlg)
+            le_ft_out.setEnabled(cb_ft_out.isChecked())
             cb_ft_in.toggled.connect(lambda v: le_ft_in.setEnabled(v))
             cb_ft_out.toggled.connect(lambda v: le_ft_out.setEnabled(v))
             form.addRow(QLabel("Titel:"), le_title)
@@ -1040,8 +1091,12 @@ class View(QGraphicsView):
                 item.dwell_ms = int(sb_dwell.value())
                 item._update_timer_text()
                 item.set_sensors_enabled(cb_ft_in.isChecked(), cb_ft_out.isChecked())
-                item.ft_in_var = (le_ft_in.text().strip() or None)
-                item.ft_out_var = (le_ft_out.text().strip() or None)
+                if callable(get_var_value):
+                    item.ft_in_var = get_var_value(le_ft_in)
+                    item.ft_out_var = get_var_value(le_ft_out)
+                else:
+                    item.ft_in_var = (le_ft_in.text().strip() or None)
+                    item.ft_out_var = (le_ft_out.text().strip() or None)
                 for var in (item.ft_in_var, item.ft_out_var):
                     if var and var not in VARS:
                         VARS[var] = False
@@ -1345,8 +1400,25 @@ class MainWindow(QMainWindow):
         self.btn_clear_boxes.clicked.connect(self.clear_all_boxes)
         topbar.addWidget(self.btn_clear_boxes)
 
+        # DB Viewer
+        self.btn_db = QPushButton("DB Viewer", self)
+        self.btn_db.clicked.connect(self.open_db_viewer)
+        topbar.addWidget(self.btn_db)
+
+        # PLC instellingen en verbinden
+        self.btn_plc_settings = QPushButton("PLC instellingen", self)
+        self.btn_plc_settings.clicked.connect(self.open_plc_settings)
+        topbar.addWidget(self.btn_plc_settings)
+
+        self.btn_connect = QPushButton("Verbind", self)
+        self.btn_connect.clicked.connect(self.start_connection)
+        topbar.addWidget(self.btn_connect)
+
+        self.lbl_status = QLabel("Snap7: Not connected", self)
+        topbar.addWidget(self.lbl_status)
+
         # Tick/simulation speed
-        from PySide6.QtWidgets import QLabel, QDoubleSpinBox
+        # imports moved to module scope to avoid shadowing names
         topbar.addWidget(QLabel("Speed:", self))
         self.spin_speed = QDoubleSpinBox(self)
         self.spin_speed.setRange(0.1, 5.0)
@@ -1361,6 +1433,19 @@ class MainWindow(QMainWindow):
         # Create graphics view (canvas)
         self.view = View()
         lay.addWidget(self.view)
+
+        # --- DB / Snap7 state ---
+        self.db_block = None  # type: ignore[assignment]
+        self.db_definition_path: str | None = None
+        self._db_dialog: QDialog | None = None
+        self._db_tree: QTreeWidget | None = None
+        self._snap_client = None
+        self._snap_timer = QTimer(self)
+        self._snap_timer.timeout.connect(self._poll_snap7)
+        # PLC connection parameters
+        self.plc_ip = "192.168.0.1"
+        self.plc_rack = 0
+        self.plc_slot = 1
 
     def all_belts_on(self):
         # Set all belts' motor_var to True (create var if needed)
@@ -1395,6 +1480,210 @@ class MainWindow(QMainWindow):
             elif choice == "Exit":
                 self.view.add_exit()
                 self.view.refresh_link_tooltips()
+
+    # ---- Helpers: variable selector from DB ----
+    def _make_var_input(self, parent, initial: str | None):
+        names = []
+        if self.db_block is not None and hasattr(self.db_block, 'data'):
+            try:
+                names = sorted(list(self.db_block.data.keys()))
+            except Exception:
+                names = []
+        if names:
+            cmb = QComboBox(parent)
+            cmb.setEditable(True)
+            cmb.addItems(names)
+            cmb.setCurrentText(initial or "")
+            return cmb
+        else:
+            return QLineEdit(initial or "", parent)
+
+    def _get_var_value(self, widget) -> str | None:
+        if isinstance(widget, QComboBox):
+            txt = widget.currentText().strip()
+            return txt or None
+        if isinstance(widget, QLineEdit):
+            txt = widget.text().strip()
+            return txt or None
+        return None
+
+    # ---- DB Viewer ----
+    def open_db_viewer(self):
+        if self._db_dialog is not None:
+            try:
+                if not self._db_dialog.isVisible():
+                    self._db_dialog.show()
+                self._db_dialog.raise_()
+                self._db_dialog.activateWindow()
+                self._refresh_db_view()
+                return
+            except Exception:
+                self._db_dialog = None
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("DB Viewer")
+        v = QVBoxLayout(dlg)
+        row = QHBoxLayout()
+        btn_load = QPushButton("DB laden...", dlg)
+        btn_load.clicked.connect(self._choose_db_definition)
+        btn_refresh = QPushButton("Refresh", dlg)
+        btn_refresh.clicked.connect(self._refresh_db_view)
+        row.addWidget(btn_load)
+        row.addWidget(btn_refresh)
+        row.addStretch(1)
+        v.addLayout(row)
+        tree = QTreeWidget(dlg)
+        tree.setColumnCount(2)
+        tree.setHeaderLabels(["Variable", "Value"])
+        v.addWidget(tree)
+        self._db_tree = tree
+        self._db_dialog = dlg
+        try:
+            # Clear our handle when dialog is closed so it can be reopened cleanly
+            dlg.finished.connect(lambda _=None: setattr(self, '_db_dialog', None))
+        except Exception:
+            pass
+        self._refresh_db_view()
+        dlg.resize(520, 500)
+        dlg.show()
+
+    def _choose_db_definition(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Kies TIA DB (.db)", "", "TIA DB (*.db)")
+        if not path:
+            return
+        if TIA_S7DataBlock is None:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Fout", "TIA_Db module niet beschikbaar")
+            return
+        try:
+            # Default to DB1 unless you prefer a prompt
+            dbn = 1
+            self.db_block = TIA_S7DataBlock.from_definition_file(path=path, db_number=dbn, nesting_depth_to_skip=1)
+            self.db_definition_path = path
+            self._refresh_db_view()
+        except Exception as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Fout", f"Kon DB niet laden:\n{e}")
+
+    def _refresh_db_view(self):
+        if self._db_tree is None or self.db_block is None:
+            return
+        self._db_tree.clear()
+        names = list(getattr(self.db_block, 'data', {}).keys())
+        for name in names:
+            try:
+                val = self.db_block[name]
+            except Exception:
+                val = "?"
+            QTreeWidgetItem(self._db_tree, [name, self._fmt_val(val)])
+        # Rich to console
+        if _RICH_OK and self.db_block is not None:
+            try:
+                console = Console()
+                title = f"DB{getattr(self.db_block, 'db_number', '?')} – {Path(self.db_definition_path).name if self.db_definition_path else ''}"
+                tbl = RichTable(title=title)
+                tbl.add_column("Variable", style="bold")
+                tbl.add_column("Value")
+                for name in names:
+                    try:
+                        val = self.db_block[name]
+                    except Exception:
+                        val = "?"
+                    style = "green" if isinstance(val, bool) and val else ("red" if isinstance(val, bool) else ("cyan" if isinstance(val, (int, float)) else "white"))
+                    tbl.add_row(name, f"[{style}]{self._fmt_val(val)}[/]")
+                console.print(tbl)
+            except Exception:
+                pass
+
+    def _fmt_val(self, v):
+        if isinstance(v, bool):
+            return "True" if v else "False"
+        if isinstance(v, float):
+            return f"{v:.4g}"
+        return str(v)
+
+    # ---- PLC settings + connection ----
+    def open_plc_settings(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("PLC instellingen")
+        v = QVBoxLayout(dlg)
+        row_ip = QHBoxLayout(); v.addLayout(row_ip)
+        row_ip.addWidget(QLabel("IP:", dlg))
+        ip_edit = QLineEdit(self.plc_ip, dlg)
+        row_ip.addWidget(ip_edit)
+        row_rack = QHBoxLayout(); v.addLayout(row_rack)
+        row_rack.addWidget(QLabel("Rack:", dlg))
+        sp_rack = QSpinBox(dlg); sp_rack.setRange(0, 10); sp_rack.setValue(int(self.plc_rack))
+        row_rack.addWidget(sp_rack)
+        row_slot = QHBoxLayout(); v.addLayout(row_slot)
+        row_slot.addWidget(QLabel("Slot:", dlg))
+        sp_slot = QSpinBox(dlg); sp_slot.setRange(0, 10); sp_slot.setValue(int(self.plc_slot))
+        row_slot.addWidget(sp_slot)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, dlg)
+        v.addWidget(buttons)
+        def accept():
+            self.plc_ip = ip_edit.text().strip() or self.plc_ip
+            self.plc_rack = int(sp_rack.value())
+            self.plc_slot = int(sp_slot.value())
+            dlg.accept()
+        buttons.accepted.connect(accept)
+        buttons.rejected.connect(dlg.reject)
+        dlg.exec()
+
+    def start_connection(self):
+        # Explicit user-triggered connect
+        if snap7 is None:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Fout", "snap7 module niet beschikbaar")
+            self.lbl_status.setText("Snap7: Not connected")
+            return
+        # create client if needed
+        if self._snap_client is None:
+            try:
+                self._snap_client = snap7.client.Client()
+            except Exception as e:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "Fout", f"Kon snap7 client maken:\n{e}")
+                self._snap_client = None
+                self.lbl_status.setText("Snap7: Not connected")
+                return
+        # attempt connect once
+        ok = False
+        try:
+            self._snap_client.connect(self.plc_ip, int(self.plc_rack), int(self.plc_slot))
+            ok = bool(self._snap_client.get_connected())
+        except Exception as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Fout", f"Kon niet verbinden:\n{e}")
+            ok = False
+        if ok:
+            self.lbl_status.setText("Snap7: Connected")
+            if not self._snap_timer.isActive():
+                self._snap_timer.start(500)
+        else:
+            self.lbl_status.setText("Snap7: Not connected")
+            if self._snap_timer.isActive():
+                self._snap_timer.stop()
+
+    def _poll_snap7(self):
+        if self._snap_client is None or self.db_block is None:
+            return
+        try:
+            if not self._snap_client.get_connected():
+                # keep status updated and do nothing further
+                self.lbl_status.setText("Snap7: Not connected")
+                return
+            self.lbl_status.setText("Snap7: Connected")
+            if self._snap_client.get_connected():
+                buf = self._snap_client.db_read(db_number=self.db_block.db_number, start=0, size=self.db_block.db_size)
+                # Update buffer in place
+                self.db_block.buffer = bytearray(buf)
+                # live refresh if dialog open
+                if self._db_dialog is not None and self._db_dialog.isVisible():
+                    self._refresh_db_view()
+        except Exception:
+            # keep trying silently
+            self.lbl_status.setText("Snap7: Not connected")
 
     def new_project(self):
         # Clear scene
@@ -1507,6 +1796,16 @@ class MainWindow(QMainWindow):
             "exits": exits,
             "links": links
         }
+        # persist DB info if available
+        try:
+            if self.db_block is not None and self.db_definition_path:
+                payload["db"] = {
+                    "definition_path": self.db_definition_path,
+                    "db_number": int(getattr(self.db_block, 'db_number', 0)),
+                    "buffer": list(getattr(self.db_block, 'buffer', bytearray()))
+                }
+        except Exception:
+            pass
         if getattr(self.view, 'generator', None) is not None:
             payload["generator"] = {
                 "interval_ms": self.view.generator.interval_ms,
@@ -1645,6 +1944,21 @@ class MainWindow(QMainWindow):
         self.view.refresh_link_tooltips()
         self.view.refresh_port_indicators()
         self.view._rebuild_downstream()
+
+        # Restore DB if present (does not auto-connect; user triggers connect)
+        try:
+            dbinfo = data.get("db")
+            if dbinfo and TIA_S7DataBlock is not None:
+                defp = dbinfo.get("definition_path")
+                dbn = dbinfo.get("db_number")
+                if defp and dbn is not None:
+                    self.db_block = TIA_S7DataBlock.from_definition_file(path=defp, db_number=int(dbn), nesting_depth_to_skip=1)
+                    self.db_definition_path = defp
+                    buf = dbinfo.get("buffer")
+                    if isinstance(buf, list):
+                        self.db_block.buffer = bytearray(buf)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
